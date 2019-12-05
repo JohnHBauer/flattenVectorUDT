@@ -1,12 +1,10 @@
 from pyspark.context import SparkContext
-from pyspark.sql import Row, SQLContext, SparkSession
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import lit, udf, col
 from pyspark.sql.types import ArrayType, DoubleType
+from collections import namedtuple
 
 import flattenVectorUDT as fv
-
-import pyspark.sql.dataframe
-from pyspark.sql.functions import pandas_udf, PandasUDFType
 
 sc = SparkContext('local[4]', 'FlatTestTime')
 
@@ -25,12 +23,17 @@ def get_df(reps=REPS):
         ("require", Vectors.sparse(3, {1: 2}), 2, Vectors.dense([6.2, 7.2])),
     ] * reps).toDF(["word", "vector", "more", "vorpal"])
 
-df = get_df(REPS)
+def get_bank():
+    path = "/Users/john.h.bauer/Downloads/bank-additional/bank-additional-full.csv"
+    df = spark.read.csv(path, header=True, inferSchema=True, sep=";")
+    df.printSchema()
+    return df
+#df = get_df(REPS)
 
 def extract(row):
     return (row.word, ) + tuple(row.vector.toArray().tolist(),) + (row.more,) + tuple(row.vorpal.toArray().tolist(),)
 
-def test_extract():
+def test_extract(df, reps):
     return df.rdd.map(extract).toDF(['word', 'vector__0', 'vector__1', 'vector__2', 'more', 'vorpal__0', 'vorpal__1'])
 
 def to_array(col):
@@ -38,7 +41,7 @@ def to_array(col):
         return v.toArray().tolist()
     return udf(to_array_, ArrayType(DoubleType()))(col)
 
-def test_to_array():
+def test_to_array(df, reps):
     df_to_array = df.withColumn("xs", to_array(col("vector"))) \
         .select(["word"] + [col("xs")[i] for i in range(3)] + ["more", "vorpal"]) \
         .withColumn("xx", to_array(col("vorpal"))) \
@@ -60,7 +63,7 @@ def flatten(df, vector, vlen):
     else:
         return df
 
-def test_flatten():
+def test_flatten(df, reps):
     dflat = flatten(df, "vector", 3)
     dflat2 = flatten(dflat, "vorpal", 2)
     return dflat2
@@ -79,44 +82,113 @@ select.append("more")
 select.extend([ith("vorpal", lit(i)) for i in range(2)])
 
 # %% timeit ...
-def test_ith():
+def test_ith(df, reps):
     return df.select(select)
 
-def test_flattenVectorUDT():
+def test_flattenVectorUDT(df, reps):
     return fv.flattenVectorUDT(df)
 
 if __name__ == '__main__':
     import timeit
 
+    df = get_df(10)
+    df = get_bank()
     # make sure these work as intended
-    test_ith().show(4)
-    test_flatten().show(4)
-    test_to_array().show(4)
-    test_extract().show(4)
-    test_flattenVectorUDT().show(4)
+    #test_ith(df, 10).show(4)
+    #test_flatten(df, 10).show(4)
+    #test_to_array(df, 10).show(4)
+    #test_extract(df, 10).show(4)
+    test_flattenVectorUDT(df, 10).show(4)
 
-    print("i_th\t\t",
-          timeit.timeit("test_ith()",
-                       setup="from __main__ import test_ith",
-                       number=7)
-         )
-    print("flattenVectorUDT\t\t",
-          timeit.timeit("test_flattenVectorUDT()",
-                       setup="from __main__ import test_flattenVectorUDT",
-                       number=7)
-         )
-    print("flatten\t\t",
-          timeit.timeit("test_flatten()",
-                       setup="from __main__ import test_flatten",
-                       number=7)
-         )
-    print("to_array\t",
-          timeit.timeit("test_to_array()",
-                       setup="from __main__ import test_to_array",
-                       number=7)
-         )
-    print("extract\t\t",
-          timeit.timeit("test_extract()",
-                       setup="from __main__ import test_extract",
-                       number=7)
-         )
+    timeit_stats = namedtuple("timeit_stats", ["function", "repetitions", "time"])
+
+
+    def get_timeit_stats(function, reps=REPS):
+        time = timeit.timeit("test_{}(df, reps)".format(function),
+                             setup="from __main__ import get_df, test_{}; reps = {}; df = get_df(reps)".format(function, reps),
+                             number=7)
+        return timeit_stats(function, reps, time)
+
+
+    def get_timeit_stats_all(reps=REPS):
+        stats = timeit_stats(
+              "i_th",
+              reps,
+              timeit.timeit("test_ith(reps)",
+                            setup="from __main__ import get_df, test_ith; reps = {}; df = get_df(reps)".format(reps),
+                            number=7)
+              )
+        stats = timeit_stats(
+              "flattenVectorUDT",
+              timeit.timeit("test_flattenVectorUDT(reps)",
+                            setup="from __main__ import get_df, test_flattenVectorUDT; reps = {}; df = get_df(reps)".format(
+                                reps),
+                            number=7)
+              )
+        stats = timeit_stats(
+              "flatten",
+              timeit.timeit("test_flatten(reps)",
+                            setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(
+                                reps),
+                            number=7)
+              )
+        stats = timeit_stats(
+              "to_array",
+              timeit.timeit("test_to_array(reps)",
+                            setup="from __main__ import get_df, test_to_array; reps = {}; df = get_df(reps)".format(
+                                reps),
+                            number=7)
+              )
+        stats = timeit_stats(
+              "extract",
+              timeit.timeit("test_extract(reps)",
+                            setup="from __main__ import get_df, test_extract; reps = {}; df = get_df(reps)".format(
+                                reps),
+                            number=7)
+              )
+
+    def time_all(reps=REPS):
+        print("-" * 50, "repetitions =", reps)
+        print("i_th\t\t\t\t",
+              timeit.timeit("test_ith(reps)",
+                           setup="from __main__ import get_df, test_ith; reps = {}; df = get_df(reps)".format(reps),
+                           number=7)
+             )
+        print("flattenVectorUDT\t",
+              timeit.timeit("test_flattenVectorUDT(reps)",
+                           setup="from __main__ import get_df, test_flattenVectorUDT; reps = {}; df = get_df(reps)".format(reps),
+                           number=7)
+             )
+        print("flatten\t\t\t\t",
+              timeit.timeit("test_flatten(reps)",
+                           setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(reps),
+                           number=7)
+             )
+        print("to_array\t\t\t",
+              timeit.timeit("test_to_array(reps)",
+                           setup="from __main__ import get_df, test_to_array; reps = {}; df = get_df(reps)".format(reps),
+                           number=7)
+             )
+        print("extract\t\t\t\t",
+              timeit.timeit("test_extract(reps)",
+                           setup="from __main__ import get_df, test_extract; reps = {}; df = get_df(reps)".format(reps),
+                           number=7)
+             )
+
+    # for reps in range(1000, 3001, 1000):
+    #     time_all(reps)
+
+    zed = {}
+    for f in ("flattenVectorUDT", "extract"):
+        for reps in range(1000, 110001, 1000):
+            stats = get_timeit_stats(f, reps)
+            zed[f, reps] = stats
+            print("{:20}{:5d}{:6.3f}".format(*stats))
+        
+    # zed['fv_500'] = get_timeit_stats("flattenVectorUDT", reps=500)
+    # zed['ex_500'] = get_timeit_stats("extract", reps=500)
+    # zed['fv1000'] = get_timeit_stats("flattenVectorUDT", reps=1000)
+    # zed['ex1000'] = get_timeit_stats("extract", reps=1000)
+    # for v in zed.values():
+    #     print("{:20}{:5d}{:6.3f}".format(*v))
+
