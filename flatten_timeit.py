@@ -2,6 +2,10 @@ from pyspark.context import SparkContext
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import lit, udf, col
 from pyspark.sql.types import ArrayType, DoubleType
+
+from pyspark.ml.feature import OneHotEncoderEstimator, OneHotEncoderModel
+from pyspark.ml.linalg import Vectors
+
 from collections import namedtuple
 
 import flattenVectorUDT as fv
@@ -11,17 +15,31 @@ sc = SparkContext('local[4]', 'FlatTestTime')
 spark = SparkSession(sc)
 spark.conf.set("spark.sql.execution.arrow.enabled", True)
 
-from pyspark.ml.linalg import Vectors
 
 # copy the two rows in the test dataframe a bunch of times,
 # make this small enough for testing, or go for "big data" and be prepared to wait
 REPS = 50000
 
-def get_df(reps=REPS):
+def get_df_0(reps=REPS):
     return sc.parallelize([
         ("assert", Vectors.dense([1, 2, 3]), 1, Vectors.dense([4.1, 5.1])),
         ("require", Vectors.sparse(3, {1: 2}), 2, Vectors.dense([6.2, 7.2])),
     ] * reps).toDF(["word", "vector", "more", "vorpal"])
+
+def get_df(reps=REPS):
+    def make_rows(i):
+        f = float(i)
+        return [
+            ("assert", Vectors.sparse(3, [0, 1, 2], [1, 2, 3]), 0, Vectors.dense([f + 0.1, f + 1.1])),
+            ("require", Vectors.sparse(3, {1: 2}), 1, Vectors.dense([f + 2.2, f + 3.2])),
+        ]
+    rows = []
+    for i in range(reps):
+        rows.extend(make_rows(i))
+
+    df = sc.parallelize(rows).toDF(["word", "vector", "more", "vorpal"])
+    ohe = OneHotEncoderEstimator(inputCols=['more'], outputCols=['more__ohe'])
+    return ohe.fit(df).transform(df)
 
 def get_bank():
     path = "/Users/john.h.bauer/Downloads/bank-additional/bank-additional-full.csv"
@@ -180,7 +198,7 @@ if __name__ == '__main__':
 
     zed = {}
     for f in ("flattenVectorUDT", "extract"):
-        for reps in range(1000, 110001, 1000):
+        for reps in range(10000, 110001, 10000):
             stats = get_timeit_stats(f, reps)
             zed[f, reps] = stats
             print("{:20}{:5d}{:6.3f}".format(*stats))
