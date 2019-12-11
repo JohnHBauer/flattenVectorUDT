@@ -100,10 +100,8 @@ def _getVectorLengthAndType(name, row):
     try:
         v0 = row[name]
         num_elements = len(v0)
-        if isinstance(v0, DenseVector):
+        if isinstance(v0, (DenseVector, SparseVector)):
             value = v0[0]
-        elif isinstance(v0, SparseVector):
-            value = v0.toArray()[0]
         else:
             print("Not a vector? Default to using DoubleType")
             value = 0.0
