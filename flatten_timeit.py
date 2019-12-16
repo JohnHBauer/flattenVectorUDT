@@ -8,7 +8,8 @@ from pyspark.ml.linalg import Vectors
 
 from collections import namedtuple
 
-import flattenVectorUDT as fv
+import flattenVectorUDT.flattenVectorUDT as fv
+import flattenVectorUDT.vector_flattener_transformer as fvt
 
 sc = SparkContext('local[4]', 'FlatTestTime')
 
@@ -110,7 +111,9 @@ if __name__ == '__main__':
     import timeit
 
     df = get_df(10)
-    df = get_bank()
+    df.printSchema()
+    df.show(4)
+   # df = get_bank()
     # make sure these work as intended
     #test_ith(df, 10).show(4)
     #test_flatten(df, 10).show(4)
@@ -144,7 +147,7 @@ if __name__ == '__main__':
                             number=7)
               )
         stats = timeit_stats(
-              "flatten",
+              "flattenVectorUDT",
               timeit.timeit("test_flatten(reps)",
                             setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(
                                 reps),
@@ -177,7 +180,7 @@ if __name__ == '__main__':
                            setup="from __main__ import get_df, test_flattenVectorUDT; reps = {}; df = get_df(reps)".format(reps),
                            number=7)
              )
-        print("flatten\t\t\t\t",
+        print("flattenVectorUDT\t\t\t\t",
               timeit.timeit("test_flatten(reps)",
                            setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(reps),
                            number=7)
@@ -198,11 +201,16 @@ if __name__ == '__main__':
 
     zed = {}
     for f in ("flattenVectorUDT", "extract"):
-        for reps in range(10000, 110001, 10000):
+        for reps in range(100, 1101, 100):
             stats = get_timeit_stats(f, reps)
             zed[f, reps] = stats
             print("{:20}{:5d}{:6.3f}".format(*stats))
-        
+
+    foo = fvt.VectorFlattener().transform(df)
+    bar = fvt.VectorReAssembler().transform(foo)
+    foo.printSchema()
+    bar.printSchema()
+    bar.show(2)
     # zed['fv_500'] = get_timeit_stats("flattenVectorUDT", reps=500)
     # zed['ex_500'] = get_timeit_stats("extract", reps=500)
     # zed['fv1000'] = get_timeit_stats("flattenVectorUDT", reps=1000)
