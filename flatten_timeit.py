@@ -8,8 +8,9 @@ from pyspark.ml.linalg import Vectors
 
 from collections import namedtuple
 
-import flattenVectorUDT.flattenVectorUDT as fv
-import flattenVectorUDT.vector_flattener_transformer as fvt
+#import flattenVectorUDT.flattenVectorUDT as fv
+import flattenVectorUDT as fv
+#import flattenVectorUDT.vector_flattener_transformer as fvt
 
 sc = SparkContext('local[4]', 'FlatTestTime')
 
@@ -105,7 +106,7 @@ def test_ith(df, reps):
     return df.select(select)
 
 def test_flattenVectorUDT(df, reps):
-    return fv.flattenVectorUDT(df)
+    return fv.VectorFlattener.flattenVectorUDT(df)
 
 if __name__ == '__main__':
     import timeit
@@ -201,16 +202,26 @@ if __name__ == '__main__':
 
     zed = {}
     for f in ("flattenVectorUDT", "extract"):
-        for reps in range(100, 1101, 100):
+        for reps in range(100, 1101, 1000):
             stats = get_timeit_stats(f, reps)
             zed[f, reps] = stats
             print("{:20}{:5d}{:6.3f}".format(*stats))
 
-    foo = fvt.VectorFlattener().transform(df)
-    bar = fvt.VectorReAssembler().transform(foo)
+    foo = fv.VectorFlattener().transform(df)
+    bar = fv.VectorReAssembler().transform(foo)
+    fubarMod = fv.VectorFlattenerEstimator().fit(df)
+    df_flattest = fubarMod.transform(df)
+    print(fubarMod.outputColumnMap)
+    for name, length in zip(fubarMod.getInputCols(), fubarMod.getLengths()):
+        print(name, length)
+    for name, info in fubarMod.vectorInfo.items():
+        print(name, info)
     foo.printSchema()
     bar.printSchema()
+    df_flattest.printSchema()
     bar.show(2)
+    df_flattest.show(2)
+    foo.show(2)
     # zed['fv_500'] = get_timeit_stats("flattenVectorUDT", reps=500)
     # zed['ex_500'] = get_timeit_stats("extract", reps=500)
     # zed['fv1000'] = get_timeit_stats("flattenVectorUDT", reps=1000)

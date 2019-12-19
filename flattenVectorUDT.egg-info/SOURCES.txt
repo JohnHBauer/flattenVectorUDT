@@ -1,0 +1,7 @@
+README.md
+setup.py
+flattenVectorUDT/__init__.py
+flattenVectorUDT.egg-info/PKG-INFO
+flattenVectorUDT.egg-info/SOURCES.txt
+flattenVectorUDT.egg-info/dependency_links.txt
+flattenVectorUDT.egg-info/top_level.txt
