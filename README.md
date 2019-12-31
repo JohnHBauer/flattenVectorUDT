@@ -23,16 +23,17 @@ to return a dataframe without `VectorUDT`s.
 If meta-data for the length and element type of VectorUDT was consistently and reliably set,
 there would be no need to inspect a row in order to infer them.
 
-There is a `Transformer` which minimally wraps the above, and an `Estimator`/`Model` pair which makes 
-the names, lengths and data types of vectors available as parameters of the `Model` obect.
+A `Transformer` class minimally wraps the above, and an `Estimator`/`Model` pair.  The `fit` method
+finds the names, lengths, and data types of vectors, and makes them available as parameters of the 
+`Model` obect which it emits.
 
 A `VectorReAssembler` detects columns whose names end in `[###]` (where ### is a sequence of digits)
-and uses VectorAssembler to re-assemble them into a vector.  A dataframe which is flattened and 
+and uses `VectorAssembler` to re-assemble them into a vector.  A dataframe which is flattened and 
 re-assembled will usually be identical to the initial dataframe.  However, note that any 
-SparseVector-valued columns will be re-assembled as DenseVector.
+`SparseVector`-valued columns will be re-assembled as `DenseVector`.
 
-Ideally, call flattenVectorUDT before pandas_udf, apply some pandas transformations,
-(drop unneeded columns), and re-assemble.  pandas_udf could be decorated to do this.
+Ideally, call `flattenVectorUDT` before `pandas_udf`, apply some pandas transformations,
+(drop unneeded columns), and re-assemble.  `pandas_udf` could be decorated to do this.
 
 In the long term, Scala code along the lines of projection of each vector element
 into its own column followed by flatmap, together with a PySpark wrapper,
