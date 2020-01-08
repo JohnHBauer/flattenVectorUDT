@@ -10,6 +10,7 @@ from collections import namedtuple
 
 #import flattenVectorUDT.flattenVectorUDT as fv
 import flattenVectorUDT as fv
+import PandasUDFTransformer as pdt
 #import flattenVectorUDT.vector_flattener_transformer as fvt
 
 sc = SparkContext('local[4]', 'FlatTestTime')

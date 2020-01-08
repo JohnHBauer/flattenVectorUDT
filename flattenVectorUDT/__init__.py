@@ -269,7 +269,7 @@ class HasDataTypes(Params):
 
     def getDataTypes(self):
         """
-        Gets the value of separator or its default value.
+        Gets the value of dataType or its default value.
         """
         return self.getOrDefault(self.dataTypes)
 
