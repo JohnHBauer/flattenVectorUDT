@@ -1,5 +1,5 @@
 import codecs
-import pickle
+import cloudpickle, pickle
 
 from abc import ABC, abstractmethod
 
@@ -8,7 +8,7 @@ from pyspark import keyword_only
 from pyspark.ml import Estimator, Model, Transformer, Pipeline
 from pyspark.rdd import PythonEvalType
 from pyspark.ml.param import Param, Params, TypeConverters
-from pyspark.ml.param.shared import HasInputCol, HasOutputCol
+from pyspark.ml.param.shared import HasInputCol, HasOutputCol, HasInputCols, HasOutputCols
 from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
 from pyspark.sql.functions import pandas_udf, lit, col
 
@@ -52,7 +52,7 @@ class HasFunction(Params):
         """
         if callable(function):
             # make a string suitable for read/write so Transformer can be saved and loaded
-            return codecs.encode(pickle.dumps(function), "base64").decode()
+            return codecs.encode(cloudpickle.dumps(function), "base64").decode()
         elif isinstance(function, basestring):
             # function had better be a string which is already an encoded function, or caller beware
             return function
@@ -160,7 +160,7 @@ class HasGroupBy(Params):
         return self.getOrDefault(self.groupBy)
 
 
-class PandasUDFTransformer(ABC, Transformer, HasFunction, HasFunctionType, HasReturnType,
+class PandasUDFTransformer(ABC, Transformer, HasFunction, HasReturnType,
                            DefaultParamsReadable, DefaultParamsWritable):
     """Allows PySpark User-Defined Function to be used in a Pipeline.
 
@@ -178,14 +178,14 @@ class PandasUDFTransformer(ABC, Transformer, HasFunction, HasFunctionType, HasRe
 
     @keyword_only
     @abstractmethod
-    def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF):
-        pass
+    def __init__(self, function="", returnType=""):
+        self.functionType = None
 
     @keyword_only
     @abstractmethod
-    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF):
+    def setParams(self, function="", returnType=""):
         """
-        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF)
+        setParams(self, function="", returnType="")
         """
         raise NotImplementedError()
 
@@ -197,7 +197,7 @@ class PandasUDFTransformer(ABC, Transformer, HasFunction, HasFunctionType, HasRe
     def pandas_udf(self):
         function = self.getFunction()
         returnType = self.getReturnType()
-        functionType = self.getFunctionType()
+        functionType = self.functionType
 
         # f = pickle.loads(codecs.decode(function.encode(), "base64"))
         f = self.decode_function(function)
@@ -211,7 +211,7 @@ class PandasUDFTransformer(ABC, Transformer, HasFunction, HasFunctionType, HasRe
                           )
 
 
-class PandasUDFGroupedTransformer(PandasUDFTransformer, HasGroupBy,
+class PandasUDFGroupedMapTransformer(PandasUDFTransformer, HasGroupBy,
                            DefaultParamsReadable, DefaultParamsWritable):
     """Allows PySpark User-Defined Function to be used in a Pipeline.
 
@@ -227,10 +227,11 @@ class PandasUDFGroupedTransformer(PandasUDFTransformer, HasGroupBy,
         For example "id long, v double"
     """
     @keyword_only
-    def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[]):
+    def __init__(self, function="", returnType="", groupBy=[]):
         super(Transformer, self).__init__()
+        self.functionType = PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF
 
-        self._setDefault(function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[])
+        self._setDefault(function="", returnType="", groupBy=[])
 
         kwargs = self._input_kwargs
 
@@ -238,9 +239,9 @@ class PandasUDFGroupedTransformer(PandasUDFTransformer, HasGroupBy,
 
 
     @keyword_only
-    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[]):
+    def setParams(self, function="", returnType="", groupBy=[]):
         """
-        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[])
+        setParams(self, function="", returnType="", groupBy=[])
         """
         kwargs = self._input_kwargs
         kwargs['function'] = self.encode_function(function)
@@ -248,24 +249,99 @@ class PandasUDFGroupedTransformer(PandasUDFTransformer, HasGroupBy,
         return self
 
     def _transform(self, data):
-        function = self.getFunction()
-        returnType = self.getReturnType()
-        functionType = self.getFunctionType()
         groupBy = self.getGroupBy()
 
-        f = self.decode_function(function)
-        
-        if not callable(f):
-            raise ValueError("Decoded function parameter is not callable.")
+        return data.groupBy(*groupBy).apply(self.pandas_udf)
 
-        if functionType in (PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF,
-                            PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
-                            ):
-            return data.groupBy(*groupBy).apply(self.pandas_udf)
-        if functionType == PythonEvalType.SQL_SCALAR_PANDAS_UDF:
-            return data.withColumn(outputCol, self.pandas_udf(inputCol))
-        else:
-            return data
+
+
+class PandasUDFGroupedAggTransformer(PandasUDFTransformer, HasGroupBy, HasInputCol, HasOutputCol,
+                                     DefaultParamsReadable, DefaultParamsWritable):
+    """Allows PySpark User-Defined Function to be used in a Pipeline.
+
+    Parameters
+    ----------
+    function:
+        must be a callable object which can be pickled, or a string representation thereof obtained with
+        HasFunction.encode_function.
+    functionType:
+        must be a value defined by the enumeration PythonEvalType.
+    returnType:
+        DDL-formatted string describing the schema of the returned Spark dataframe.
+        For example "double"
+    """
+
+    @keyword_only
+    def __init__(self, function="", returnType="", groupBy=[], inputCol="", outputCol=""):
+        super(Transformer, self).__init__()
+        self.functionType = PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF
+
+        self._setDefault(function="", returnType="", groupBy=[], inputCol="", outputCol="")
+
+        kwargs = self._input_kwargs
+        self.setParams(**kwargs)
+
+    @keyword_only
+    def setParams(self, function="", returnType="", groupBy=[], inputCol="", outputCol=""):
+        """
+        setParams(self, function="", returnType="", groupBy=[], inputCol="", outputCol="")
+        """
+        kwargs = self._input_kwargs
+        kwargs['function'] = self.encode_function(function)
+        self._set(**kwargs)
+        return self
+
+    def _transform(self, data):
+        groupBy = self.getGroupBy()
+        inputCol = self.getInputCol()
+        outputCol = self.getOutputCol()
+
+        return data.groupBy(*groupBy).agg(self.pandas_udf(inputCol).alias(outputCol))
+
+
+class PandasUDFGroupedAggsTransformer(PandasUDFTransformer, HasGroupBy, HasInputCols, HasOutputCols,
+                                      DefaultParamsReadable, DefaultParamsWritable):
+    """Allows PySpark User-Defined Function to be used in a Pipeline.
+
+    Parameters
+    ----------
+    function:
+        must be a callable object which can be pickled, or a string representation thereof obtained with
+        HasFunction.encode_function.
+    functionType:
+        must be a value defined by the enumeration PythonEvalType.
+    returnType:
+        DDL-formatted string describing the schema of the returned Spark dataframe.
+        For example "double"
+    """
+
+    @keyword_only
+    def __init__(self, function="", returnType="", groupBy=[], inputCols=[], outputCols=[]):
+        super(Transformer, self).__init__()
+        self.functionType = PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF
+
+        self._setDefault(function="", returnType="", groupBy=[], inputCols=[], outputCols=[])
+
+        kwargs = self._input_kwargs
+        self.setParams(**kwargs)
+
+    @keyword_only
+    def setParams(self, function="", returnType="", groupBy=[], inputCols=[], outputCols=[]):
+        """
+        setParams(self, function="", returnType="", groupBy=[], inputCols=[], outputCols=[])
+        """
+        kwargs = self._input_kwargs
+        kwargs['function'] = self.encode_function(function)
+        self._set(**kwargs)
+        return self
+
+    def _transform(self, data):
+        groupBy = self.getGroupBy()
+        inputCols = self.getInputCols()
+        outputCols = self.getOutputCols()
+
+        expr = [self.pandas_udf(inputCol).alias(outputCol) for inputCol, outputCol in zip(inputCols, outputCols)]
+        return data.groupBy(*groupBy).agg(*expr)
 
 
 class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol,
@@ -285,8 +361,8 @@ class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol
     @keyword_only
     def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol=""):
         super(Transformer, self).__init__()
-
-        self._setDefault(function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol="")
+        self.functionType = PythonEvalType.SQL_SCALAR_PANDAS_UDF
+        self._setDefault(function="", returnType="", inputCol="", outputCol="")
 
         kwargs = self._input_kwargs
 
@@ -294,9 +370,9 @@ class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol
 
 
     @keyword_only
-    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol=""):
+    def setParams(self, function="", returnType="", inputCol="", outputCol=""):
         """
-        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol="")
+        setParams(self, function="", returnType="", inputCol="", outputCol="")
         """
         kwargs = self._input_kwargs
 
@@ -309,20 +385,11 @@ class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol
         return self
 
     def _transform(self, data):
-        function = self.getFunction()
-        functionType = self.getFunctionType()
         inputCol = self.getInputCol()
         outputCol = self.getOutputCol()
 
-        f = self.decode_function(function)
+        return data.withColumn(outputCol, self.pandas_udf(inputCol))
 
-        if not callable(f):
-            raise ValueError("Decoded function parameter is not callable.")
-
-        if functionType == PythonEvalType.SQL_SCALAR_PANDAS_UDF:
-            return data.withColumn(outputCol, self.pandas_udf(inputCol))
-        else:
-            return data
 
 if __name__ == "__main__":
     import sys
@@ -367,8 +434,7 @@ if __name__ == "__main__":
         return pdf.assign(v=(v - v.mean()) / v.std())
 
     schema = "id long, v double"
-    fubb = PandasUDFGroupedTransformer(function=normalize,
-                                       functionType=PandasUDFType.GROUPED_MAP,
+    fubb = PandasUDFGroupedMapTransformer(function=normalize,
                                        returnType=schema,
                                        groupBy=["id"],
                                        )
@@ -410,8 +476,7 @@ if __name__ == "__main__":
         pdf["age_resid"] = (v - v.mean()) / v.std()
         return pdf
 
-    fubr = PandasUDFGroupedTransformer(function=normalizer,
-                                       functionType=PandasUDFType.GROUPED_MAP,
+    fubr = PandasUDFGroupedMapTransformer(function=normalizer,
                                        returnType="id long, name string, age INT, age_resid float",
                                        groupBy=["id"],
                                        )
@@ -428,19 +493,28 @@ if __name__ == "__main__":
     dfubb3.show()
     dfubb3.printSchema()
 
-    def mean(pdf):
-        v = pdf["age"]
-        pdf["age_mean"] = v.mean()
-        return pdf
+    def mean(v):
+        return v.mean()
 
-    gagg = PandasUDFGroupedTransformer(function=mean,
-                                       functionType=PandasUDFType.GROUPED_AGG,
-                                       returnType="id long, age_meam double",
-                                       groupBy=["id"],
+    gagg = PandasUDFGroupedAggTransformer(function=mean,
+                                          returnType="double",
+                                          groupBy=["id"],
+                                          inputCol="age",
+                                          outputCol="mean_age"
                                        )
 
     gagg.transform(dfscalar1).show()
 
+    # n.b. x is a Pandas Series object
+    glam = PandasUDFGroupedAggsTransformer(function=lambda x: x.std(),
+                                           returnType="double",
+                                           groupBy=["id"],
+                                           inputCols=["age", "age"],
+                                           outputCols=["std_age", "std_age_foo"]
+                                       )
+    # ToDo: consider a plural version with lists of functions, inputCols, outputCols so as not to work one col at a time
+
+    glam.transform(dfscalar1).show()
 
     foo_scalar = """
        from pyspark.sql.functions import pandas_udf, PandasUDFType
