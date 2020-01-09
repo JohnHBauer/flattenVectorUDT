@@ -1,11 +1,14 @@
 import codecs
 import pickle
 
+from abc import ABC, abstractmethod
+
 from pyspark import keyword_only
 
 from pyspark.ml import Estimator, Model, Transformer, Pipeline
 from pyspark.rdd import PythonEvalType
 from pyspark.ml.param import Param, Params, TypeConverters
+from pyspark.ml.param.shared import HasInputCol, HasOutputCol
 from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
 from pyspark.sql.functions import pandas_udf, lit, col
 
@@ -37,6 +40,39 @@ class HasFunction(Params):
         """
         return self.getOrDefault(self.function)
 
+    @staticmethod
+    def encode_function(function):
+        """Encode a callable as a string which can be used as an argument to PandasUDFTransformer.
+
+        The function is pickled to `bytes`, encoded with base64 to prevent invalid characters, then decoded to a string.
+
+        `<https://stackoverflow.com/questions/30469575/how-to-pickle-and-unpickle-to-portable-string-in-python-3>`_
+        If a string is supplied, it is presumed to have been previously encoded and will be returned unchanged.
+        For example, after being saved, load will create a new object using the encoded function.
+        """
+        if callable(function):
+            # make a string suitable for read/write so Transformer can be saved and loaded
+            return codecs.encode(pickle.dumps(function), "base64").decode()
+        elif isinstance(function, basestring):
+            # function had better be a string which is already an encoded function, or caller beware
+            return function
+        else:
+            raise ValueError("function argument must be callable, or a string which has already been encoded.")
+
+    @staticmethod
+    def decode_function(function):
+        """Decode and un-pickle a string, presumed to have been encoded with `PandasUDFTransformer.encode_function`.
+
+        The string is encoded to `bytes`, base64-decoded, then un-pickled.
+        """
+        try:
+            f = pickle.loads(codecs.decode(function.encode(), "base64"))
+        except:
+            raise ValueError("encoded function required.")
+        if not callable(f):
+            raise ValueError("decoded string must be callable, i.e. a function")
+        # could check for 1 or 2 positional arguments ???
+        return f
 
 class HasReturnType(Params):
     """
@@ -124,115 +160,44 @@ class HasGroupBy(Params):
         return self.getOrDefault(self.groupBy)
 
 
-class PandasUDFTransformer(Transformer, HasFunction, HasFunctionType, HasReturnType, HasGroupBy,
+class PandasUDFTransformer(ABC, Transformer, HasFunction, HasFunctionType, HasReturnType,
                            DefaultParamsReadable, DefaultParamsWritable):
     """Allows PySpark User-Defined Function to be used in a Pipeline.
 
     Parameters
     ----------
     function:
-        must be a callable object which can be pickled, or a string representation thereof obtained with encode_function.
+        must be a callable object which can be pickled, or a string representation thereof obtained with
+        HasFunction.encode_function.
     functionType:
         must be a value defined by the enumeration PythonEvalType.
     returnType:
         DDL-formatted string describing the schema of the returned Spark dataframe.
+        For example "id long, v double"
     """
-    @keyword_only
-    def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[]):
-        super(Transformer, self).__init__()
-
-        self._setDefault(function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[])
-
-        kwargs = self._input_kwargs
-
-        # if callable(function):
-        #     f = function
-        #      # make a string suitable for read/write
-        #     function = self.encode_function(function)
-        #     #function = codecs.encode(pickle.dumps(function), "base64").decode()
-        #     kwargs['function'] = function
-        # elif isinstance(function, basestring):
-        #     f = self.encode_function(function)
-        #     #f = pickle.loads(codecs.decode(function.encode(), "base64"))
-
-        self.setParams(**kwargs)
-
-        # self._pandas_udf = pandas_udf(f=f,
-        #                               returnType=returnType,
-        #                               functionType=functionType,
-        #                               )
-
 
     @keyword_only
-    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[]):
+    @abstractmethod
+    def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF):
+        pass
+
+    @keyword_only
+    @abstractmethod
+    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF):
         """
-        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[])
+        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF)
         """
-        kwargs = self._input_kwargs
+        raise NotImplementedError()
 
-        # if callable(function):
-        #      # make a string suitable for read/write so Transformer can be saved and loaded
-        #     function = codecs.encode(pickle.dumps(function), "base64").decode()
-        kwargs['function'] = self.encode_function(function)
-
-        self._set(**kwargs)
-
-        return self
-
-    def _col_type_name(self):
-        # really shouldn't worry about/allow comma
-        tokens = self.getReturnType().split(",")[0].split()
-        # consider: should this  strict, i.e. len(tokens) == 2 ?
-        if len(tokens) > 1:
-            col_type = tokens[0]
-            col_name = tokens[1]
-        elif tokens:
-            col_type = tokens[0]
-            col_name = ""
-        else:
-            col_type = "string"
-            col_name = ""
-        return col_type, col_name
-
+    @abstractmethod
     def _transform(self, data):
-        function = self.getFunction()
-        returnType = self.getReturnType()
-        functionType = self.getFunctionType()
-        groupBy = self.getGroupBy()
+        raise NotImplementedError()
 
-        #f = pickle.loads(codecs.decode(function.encode(), "base64"))
-        f = self.decode_function(function)
-        
-        if not callable(f):
-            raise ValueError("Decoded function parameter is not callable.")
-
-        if functionType == PythonEvalType.SQL_SCALAR_PANDAS_UDF:
-            col_type, col_name = self._col_type_name()
-            if col_name:
-                return data.withColumn(col_name, self.pandas_udf())
-            # n.b. comparable to data.select(self.pandas_udf).alias(col_name)
-            else:
-                # column name will be constructed by sql: function(col)
-                return data.select(self.pandas_udf())
-        elif functionType in (PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF,
-                            PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
-                            ):
-            return data.groupBy(*groupBy).apply(self.pandas_udf())
-        else:
-            return data
-
-        #
-        # pdudf = pandas_udf(f=f,
-        #                    returnType=returnType,
-        #                    functionType=functionType,
-        #                    )
-        # return pdudf(data)
-
+    @property
     def pandas_udf(self):
         function = self.getFunction()
         returnType = self.getReturnType()
         functionType = self.getFunctionType()
-        #groupBy = self.getGroupBy()
 
         # f = pickle.loads(codecs.decode(function.encode(), "base64"))
         f = self.decode_function(function)
@@ -240,59 +205,26 @@ class PandasUDFTransformer(Transformer, HasFunction, HasFunctionType, HasReturnT
         if not callable(f):
             raise ValueError("Decoded function parameter is not callable.")
 
-        col_type, _ = self._col_type_name()
-
         return pandas_udf(f=f,
                           returnType=returnType,
                           functionType=functionType,
                           )
 
-    @staticmethod
-    def encode_function(function):
-        """Encode a callable as a string which can be used as an argument to PandasUDFTransformer.
 
-        The function is pickled to `bytes`, encoded with base64 to prevent invalid characters, then decoded to a string.
-
-        `<https://stackoverflow.com/questions/30469575/how-to-pickle-and-unpickle-to-portable-string-in-python-3>`_
-        If a string is supplied, it is presumed to have been previously encoded and will be returned unchanged.
-        For example, after being saved, load will create a new object using the encoded function.
-        """
-        if callable(function):
-            # make a string suitable for read/write so Transformer can be saved and loaded
-            return codecs.encode(pickle.dumps(function), "base64").decode()
-        elif isinstance(function, basestring):
-            # function had better be a string which is already an encoded function, or caller beware
-            return function
-        else:
-            raise ValueError("function argument must be callable, or a string which has already been encoded.")
-
-    @staticmethod
-    def decode_function(function):
-        """Decode and un-pickle a string, presumed to have been encoded with `PandasUDFTransformer.encode_function`.
-
-        The string is encoded to `bytes`, base64-decoded, then un-pickled.
-        """
-        try:
-            f = pickle.loads(codecs.decode(function.encode(), "base64"))
-        except:
-            raise ValueError("encoded function required.")
-        if not callable(f):
-            raise ValueError("decoded string must be a function")
-        # could check for 1 or 2 positional arguments ???
-        return f
-
-class PandasUDFGroupedTransformer(PandasUDFTransformer,  HasGroupBy,
+class PandasUDFGroupedTransformer(PandasUDFTransformer, HasGroupBy,
                            DefaultParamsReadable, DefaultParamsWritable):
     """Allows PySpark User-Defined Function to be used in a Pipeline.
 
     Parameters
     ----------
     function:
-        must be a callable object which can be pickled, or a string representation thereof obtained with encode_function.
+        must be a callable object which can be pickled, or a string representation thereof obtained with
+        HasFunction.encode_function.
     functionType:
         must be a value defined by the enumeration PythonEvalType.
     returnType:
         DDL-formatted string describing the schema of the returned Spark dataframe.
+        For example "id long, v double"
     """
     @keyword_only
     def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[]):
@@ -302,22 +234,7 @@ class PandasUDFGroupedTransformer(PandasUDFTransformer,  HasGroupBy,
 
         kwargs = self._input_kwargs
 
-        # if callable(function):
-        #     f = function
-        #      # make a string suitable for read/write
-        #     function = self.encode_function(function)
-        #     #function = codecs.encode(pickle.dumps(function), "base64").decode()
-        #     kwargs['function'] = function
-        # elif isinstance(function, basestring):
-        #     f = self.encode_function(function)
-        #     #f = pickle.loads(codecs.decode(function.encode(), "base64"))
-
         self.setParams(**kwargs)
-
-        # self._pandas_udf = pandas_udf(f=f,
-        #                               returnType=returnType,
-        #                               functionType=functionType,
-        #                               )
 
 
     @keyword_only
@@ -326,17 +243,95 @@ class PandasUDFGroupedTransformer(PandasUDFTransformer,  HasGroupBy,
         setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, groupBy=[])
         """
         kwargs = self._input_kwargs
+        kwargs['function'] = self.encode_function(function)
+        self._set(**kwargs)
+        return self
 
-        # if callable(function):
-        #      # make a string suitable for read/write so Transformer can be saved and loaded
-        #     function = codecs.encode(pickle.dumps(function), "base64").decode()
+    def _transform(self, data):
+        function = self.getFunction()
+        returnType = self.getReturnType()
+        functionType = self.getFunctionType()
+        groupBy = self.getGroupBy()
+
+        f = self.decode_function(function)
+        
+        if not callable(f):
+            raise ValueError("Decoded function parameter is not callable.")
+
+        if functionType in (PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF,
+                            PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
+                            ):
+            return data.groupBy(*groupBy).apply(self.pandas_udf)
+        if functionType == PythonEvalType.SQL_SCALAR_PANDAS_UDF:
+            return data.withColumn(outputCol, self.pandas_udf(inputCol))
+        else:
+            return data
+
+
+class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol,
+                           DefaultParamsReadable, DefaultParamsWritable):
+    """Allows PySpark User-Defined Function to be used in a Pipeline.
+
+    Parameters
+    ----------
+    function:
+        must be a callable object which can be pickled, or a string representation thereof obtained with
+        HasFunction.encode_function.
+    functionType:
+        must be a value defined by the enumeration PythonEvalType.
+    returnType:
+        DDL-formatted string describing the schema of the returned Spark dataframe.
+    """
+    @keyword_only
+    def __init__(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol=""):
+        super(Transformer, self).__init__()
+
+        self._setDefault(function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol="")
+
+        kwargs = self._input_kwargs
+
+        self.setParams(**kwargs)
+
+
+    @keyword_only
+    def setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol=""):
+        """
+        setParams(self, function="", returnType="", functionType=PythonEvalType.SQL_SCALAR_PANDAS_UDF, inputCol="", outputCol="")
+        """
+        kwargs = self._input_kwargs
+
+        # encoding is also requested in HasFunction.setFunction, but must also be done here or the TypeConverter
+        # will complain
         kwargs['function'] = self.encode_function(function)
 
         self._set(**kwargs)
 
         return self
 
+    def _transform(self, data):
+        function = self.getFunction()
+        functionType = self.getFunctionType()
+        inputCol = self.getInputCol()
+        outputCol = self.getOutputCol()
+
+        f = self.decode_function(function)
+
+        if not callable(f):
+            raise ValueError("Decoded function parameter is not callable.")
+
+        if functionType == PythonEvalType.SQL_SCALAR_PANDAS_UDF:
+            return data.withColumn(outputCol, self.pandas_udf(inputCol))
+        else:
+            return data
+
 if __name__ == "__main__":
+    import sys
+    if sys.version > '3':
+        basestring = str
+        xrange = range
+        unicode = str
+
+    from pyspark.sql.types import IntegerType, StringType
     from pyspark.sql import SparkSession
 
     spark = SparkSession.builder \
@@ -372,17 +367,80 @@ if __name__ == "__main__":
         return pdf.assign(v=(v - v.mean()) / v.std())
 
     schema = "id long, v double"
-    fubb = PandasUDFTransformer(function=normalize,
-                                functionType=PandasUDFType.GROUPED_MAP,
-                                returnType=schema,
-                                groupBy=["id"])
-    pd_normalize = fubb.pandas_udf()
+    fubb = PandasUDFGroupedTransformer(function=normalize,
+                                       functionType=PandasUDFType.GROUPED_MAP,
+                                       returnType=schema,
+                                       groupBy=["id"],
+                                       )
+    pd_normalize = fubb.pandas_udf
     dfubb = df.groupby("id").apply(pd_normalize)
 
     dfubb.show()
 
     dfubb2 = fubb.transform(df)
     dfubb2.show()
+    dfubb2.printSchema()
+
+    #slen = lambda s: s.str.len()
+    def slen(s):
+        return s.str.len()
+
+    def to_upper(s):
+        return s.str.upper()
+
+    def add_one(x):
+        return x + 1
+
+
+    fubbslen = PandasUDFScalarTransformer(function=slen, returnType="int", inputCol="name", outputCol="name_length")
+    fubbupper = PandasUDFScalarTransformer(function=to_upper, returnType="string", inputCol="name", outputCol="name_upper")
+    fubbaddone = PandasUDFScalarTransformer(function=add_one, returnType="integer",  inputCol="age", outputCol="new_age")
+
+    dfscalar = spark.createDataFrame([(1, "John Doe", 21)],
+                                     ("id", "name", "age"))
+
+    dfslen = fubbslen.transform(dfscalar)
+    dfupper = fubbupper.transform(dfslen)
+    dfaddone = fubbaddone.transform(dfupper)
+
+    dfaddone.show()
+
+    def normalizer(pdf):
+        v = pdf["age"]
+        pdf["age_resid"] = (v - v.mean()) / v.std()
+        return pdf
+
+    fubr = PandasUDFGroupedTransformer(function=normalizer,
+                                       functionType=PandasUDFType.GROUPED_MAP,
+                                       returnType="id long, name string, age INT, age_resid float",
+                                       groupBy=["id"],
+                                       )
+
+    dfscalar1 = spark.createDataFrame([(1, "John Doe", 21),
+                                       (1, "Jane Doe", 11),
+                                       (2, "John Roe", 31)],
+                                      ("id", "name", "age"))
+
+    pipe = Pipeline(stages=[fubr, fubbslen, fubbupper, fubbaddone])
+    pipemod = pipe.fit(dfscalar1)
+
+    dfubb3 = pipemod.transform(dfscalar1)
+    dfubb3.show()
+    dfubb3.printSchema()
+
+    def mean(pdf):
+        v = pdf["age"]
+        pdf["age_mean"] = v.mean()
+        return pdf
+
+    gagg = PandasUDFGroupedTransformer(function=mean,
+                                       functionType=PandasUDFType.GROUPED_AGG,
+                                       returnType="id long, age_meam double",
+                                       groupBy=["id"],
+                                       )
+
+    gagg.transform(dfscalar1).show()
+
 
     foo_scalar = """
        from pyspark.sql.functions import pandas_udf, PandasUDFType
