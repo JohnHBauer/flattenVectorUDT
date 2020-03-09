@@ -4,11 +4,11 @@ with open("README.md", "r") as fh:
    long_description = fh.read()
 
 setup(
-   name='flattenVectorUDT',
+   name='FlattenVectorUDT',
    version='0.1.0',
    author='john.h.bauer',
    author_email='john.h.bauer@gmail.com',
-   packages=['flattenVectorUDT'],
+   packages=['FlattenVectorUDT'],
    scripts=[],
    url='',
    license='LICENSE.txt',

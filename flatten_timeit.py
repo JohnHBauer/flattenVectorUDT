@@ -3,15 +3,19 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import lit, udf, col
 from pyspark.sql.types import ArrayType, DoubleType
 
+from pyspark.ml import Estimator, Model, Transformer, Pipeline, PipelineModel
 from pyspark.ml.feature import OneHotEncoderEstimator, OneHotEncoderModel
 from pyspark.ml.linalg import Vectors
 
 from collections import namedtuple
 
-#import flattenVectorUDT.flattenVectorUDT as fv
-import flattenVectorUDT as fv
-import PandasUDFTransformer as pdt
-#import flattenVectorUDT.vector_flattener_transformer as fvt
+#import flattenVectorUDT as fv
+#import FlattenVectorUDT as fv
+#import flattenVectorUDT as fv
+from flattenVectorUDT import VectorFlattener, VectorReAssembler, VectorFlattenerEstimator
+
+import PandasUDFTransformer.pandas_udf_transformer as pdt
+#import FlattenVectorUDT.vector_flattener_transformer as fvt
 
 sc = SparkContext('local[4]', 'FlatTestTime')
 
@@ -107,9 +111,28 @@ def test_ith(df, reps):
     return df.select(select)
 
 def test_flattenVectorUDT(df, reps):
-    return fv.VectorFlattener.flattenVectorUDT(df)
+    return VectorFlattener.flattenVectorUDT(df)
+
+
 
 if __name__ == '__main__':
+
+    def clean_directory(folder):
+        import os
+        import shutil
+
+        if os.path.exists(folder):
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    print('Failed to delete %s. Reason: %s' % (file_path, e))
+
+
     import timeit
 
     df = get_df(10)
@@ -142,14 +165,14 @@ if __name__ == '__main__':
                             number=7)
               )
         stats = timeit_stats(
-              "flattenVectorUDT",
+              "FlattenVectorUDT",
               timeit.timeit("test_flattenVectorUDT(reps)",
                             setup="from __main__ import get_df, test_flattenVectorUDT; reps = {}; df = get_df(reps)".format(
                                 reps),
                             number=7)
               )
         stats = timeit_stats(
-              "flattenVectorUDT",
+              "FlattenVectorUDT",
               timeit.timeit("test_flatten(reps)",
                             setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(
                                 reps),
@@ -177,12 +200,12 @@ if __name__ == '__main__':
                            setup="from __main__ import get_df, test_ith; reps = {}; df = get_df(reps)".format(reps),
                            number=7)
              )
-        print("flattenVectorUDT\t",
+        print("FlattenVectorUDT\t",
               timeit.timeit("test_flattenVectorUDT(reps)",
                            setup="from __main__ import get_df, test_flattenVectorUDT; reps = {}; df = get_df(reps)".format(reps),
                            number=7)
              )
-        print("flattenVectorUDT\t\t\t\t",
+        print("FlattenVectorUDT\t\t\t\t",
               timeit.timeit("test_flatten(reps)",
                            setup="from __main__ import get_df, test_flatten; reps = {}; df = get_df(reps)".format(reps),
                            number=7)
@@ -208,9 +231,9 @@ if __name__ == '__main__':
             zed[f, reps] = stats
             print("{:20}{:5d}{:6.3f}".format(*stats))
 
-    foo = fv.VectorFlattener().transform(df)
-    bar = fv.VectorReAssembler().transform(foo)
-    fubarMod = fv.VectorFlattenerEstimator().fit(df)
+    foo = VectorFlattener().transform(df)
+    bar = VectorReAssembler().transform(foo)
+    fubarMod = VectorFlattenerEstimator().fit(df)
     df_flattest = fubarMod.transform(df)
     print(fubarMod.outputColumnMap)
     for name, length in zip(fubarMod.getInputCols(), fubarMod.getLengths()):
@@ -223,10 +246,41 @@ if __name__ == '__main__':
     bar.show(2)
     df_flattest.show(2)
     foo.show(2)
-    # zed['fv_500'] = get_timeit_stats("flattenVectorUDT", reps=500)
+    # zed['fv_500'] = get_timeit_stats("FlattenVectorUDT", reps=500)
     # zed['ex_500'] = get_timeit_stats("extract", reps=500)
-    # zed['fv1000'] = get_timeit_stats("flattenVectorUDT", reps=1000)
+    # zed['fv1000'] = get_timeit_stats("FlattenVectorUDT", reps=1000)
     # zed['ex1000'] = get_timeit_stats("extract", reps=1000)
     # for v in zed.values():
     #     print("{:20}{:5d}{:6.3f}".format(*v))
 
+    vfe = VectorFlattenerEstimator()
+    pdtransform = pdt.PandasUDFScalarTransformer(function=lambda x: 2.0 * x, returnType="double",
+                                                 inputCol="vector[1]", outputCol="vavoom")
+    vra = VectorReAssembler()
+    pipe0 = Pipeline(stages=[vfe, pdtransform, vra])
+    print("Flattener Estimator pipe")
+    pipe0.fit(df).transform(df).show(4)
+
+    #pipe = Pipeline(stages=[VectorFlattenerEstimator(), pdtransform, VectorReAssembler()])
+    #pipe = Pipeline(stages=[pdtransform, VectorReAssembler()])
+
+    pipeMod = pipe0.fit(df)
+    #pipeMod = pipe.fit(foo)
+
+    path = "saved_model"
+    clean_directory(path)
+
+    pipeMod.save(path)
+    pipeMod2 = PipelineModel.load(path)
+    pipeMod2.transform(foo).show()
+
+    pipe1 = Pipeline(stages=[VectorFlattener(), pdtransform, VectorReAssembler()])
+    pipeMod1 = pipe1.fit(df)
+
+    path1 = "saved_model_1"
+    clean_directory(path1)
+    pipeMod1.save(path1)
+
+    print("Flattener Transformer pipe")
+    pipeMod3 = PipelineModel.load(path1)
+    pipeMod3.transform(df).show

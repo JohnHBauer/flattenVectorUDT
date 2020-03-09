@@ -11,12 +11,12 @@ from pyspark.ml.linalg import DenseVector, SparseVector, VectorUDT
 from pyspark.mllib.linalg import VectorUDT as VectorUDT_mllib
 from pyspark.ml.param import Param, Params, TypeConverters
 from pyspark.ml.param.shared import HasInputCols, HasOutputCols
-from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
+from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable, MLReadable, MLWritable
 from pyspark.sql.functions import udf, lit, col
 from pyspark.sql.types import DoubleType, IntegerType, StringType
 
 
-class VectorFlattener(Transformer):
+class VectorFlattener(Transformer, DefaultParamsReadable, DefaultParamsWritable):
     """Transform columns of type VectorUDT from Series of DenseVector into separate columns.
 
      Spark models produce columns such as prediction, probability which are vector-valued.
@@ -116,8 +116,7 @@ class VectorFlattener(Transformer):
         """
         return VectorFlattener.flattenVectorUDT(data)
 
-
-class VectorReAssembler(Transformer):
+class VectorReAssembler(Transformer, DefaultParamsReadable, DefaultParamsWritable):
     """Transform columns produced by VectorFlattener into a Spark VectorUDT.
 
     Columns of the form {name}[{index}] will be combined into a single vector.

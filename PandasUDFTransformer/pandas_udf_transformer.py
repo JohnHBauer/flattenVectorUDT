@@ -12,7 +12,9 @@ from pyspark.ml.param.shared import HasInputCol, HasOutputCol, HasInputCols, Has
 from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
 from pyspark.sql.functions import pandas_udf, lit, col
 
-from flattenVectorUDT.flattenVectorUDT import VectorDataType
+basestring = str
+
+#from FlattenVectorUDT.FlattenVectorUDT import VectorDataType
 
 # TODO: HasFunction, HasReturnType, HasFunctionType -- also consider non-trivial default values
 
@@ -149,13 +151,14 @@ class HasGroupBy(Params):
 
     def setGroupBy(self, value):
         """
-        Sets the value of :py:attr:`returnType`.
+        Sets the value of :py:attr:`groupBy`.
         """
+        value = value if isinstance(value, list) else [value]
         return self._set(groupBy=value)
 
     def getGroupBy(self):
         """
-        Gets the value of returnType or its default value.
+        Gets the value of groupBy or its default value.
         """
         return self.getOrDefault(self.groupBy)
 
@@ -345,7 +348,7 @@ class PandasUDFGroupedAggsTransformer(PandasUDFTransformer, HasGroupBy, HasInput
 
 
 class PandasUDFScalarTransformer(PandasUDFTransformer, HasInputCol, HasOutputCol,
-                           DefaultParamsReadable, DefaultParamsWritable):
+                                 DefaultParamsReadable, DefaultParamsWritable):
     """Allows PySpark User-Defined Function to be used in a Pipeline.
 
     Parameters
@@ -406,6 +409,20 @@ if __name__ == "__main__":
         .appName("FlatTestTime") \
         .config("spark.sql.execution.arrow.enabled", True) \
         .getOrCreate()
+
+    def clean_directory(folder):
+        import os
+        import shutil
+
+        for filename in os.listdir(folder):
+            file_path = os.path.join(folder, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                print('Failed to delete %s. Reason: %s' % (file_path, e))
 
     # todo: import this from pyspark.sql.functions ... except WINDOW is missing ???
     class PandasUDFType(object):
@@ -498,7 +515,7 @@ if __name__ == "__main__":
 
     gagg = PandasUDFGroupedAggTransformer(function=mean,
                                           returnType="double",
-                                          groupBy=["id"],
+                                          groupBy="id",
                                           inputCol="age",
                                           outputCol="mean_age"
                                        )
@@ -515,6 +532,16 @@ if __name__ == "__main__":
     # ToDo: consider a plural version with lists of functions, inputCols, outputCols so as not to work one col at a time
 
     glam.transform(dfscalar1).show()
+
+    glm3 = PandasUDFGroupedAggsTransformer(function=lambda x: x.mean(),
+                                           returnType="double",
+                                           groupBy=["id"],
+                                           inputCols=["age", "age_resid"],
+                                           outputCols=["mean_age", "mean_age_resid"]
+                                       )
+    # ToDo: consider a plural version with lists of functions, inputCols, outputCols so as not to work one col at a time
+
+    glm3.transform(dfubb3).show()
 
     foo_scalar = """
        from pyspark.sql.functions import pandas_udf, PandasUDFType
