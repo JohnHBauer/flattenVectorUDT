@@ -11,7 +11,7 @@ from pyspark.ml.linalg import DenseVector, SparseVector, VectorUDT
 from pyspark.mllib.linalg import VectorUDT as VectorUDT_mllib
 from pyspark.ml.param import Param, Params, TypeConverters
 from pyspark.ml.param.shared import HasInputCols, HasOutputCols
-from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable, MLReadable, MLWritable
+from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
 from pyspark.sql.functions import udf, lit, col
 from pyspark.sql.types import DoubleType, IntegerType, StringType
 
